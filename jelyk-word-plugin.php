@@ -1163,7 +1163,7 @@ JS;
 
         $translations = [];
         if ( $card_ids ) {
-            $langs = self::DEFAULT_LANGS; // only defaults (DE handled separately)
+            $langs = self::get_default_langs(); // only defaults (DE handled separately)
             $cph   = implode( ',', array_fill( 0, count( $card_ids ), '%d' ) );
             $lph   = implode( ',', array_fill( 0, count( $langs ), '%s' ) );
 
