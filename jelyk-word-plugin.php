@@ -24,11 +24,11 @@ class Jelyk_Word_Plugin {
 	 * Display label for language codes in dropdown.
 	 * We keep DEFAULT_LANGS as a simple array of codes (strings).
 	 */
-	protected static function lang_label( $code ) {
-		$map = [
-			'de' => 'DE',
-			'en' => 'EN',
-			'uk' => 'UK',
+        protected static function lang_label( $code ) {
+                $map = [
+                        'de' => 'DE',
+                        'en' => 'EN',
+                        'uk' => 'UK',
 			'ru' => 'RU',
 			'tr' => 'TR',
 			'ar' => 'AR',
@@ -38,9 +38,21 @@ class Jelyk_Word_Plugin {
 			'es' => 'ES',
 			'it' => 'IT',
 		];
-		$code = strtolower( (string) $code );
-		return isset( $map[ $code ] ) ? $map[ $code ] : strtoupper( $code );
-	}
+                $code = strtolower( (string) $code );
+                return isset( $map[ $code ] ) ? $map[ $code ] : strtoupper( $code );
+        }
+
+        /**
+         * Normalize language code for consistent lookup / output.
+         */
+        protected static function norm_lang( $code ) {
+                $code = strtolower( trim( (string) $code ) );
+                $code = preg_replace( '/[^a-z0-9_-]/i', '', $code );
+                if ( $code === 'ua' ) {
+                        $code = 'uk';
+                }
+                return $code;
+        }
 
     /** @var array<int,bool> */
     protected static $has_meanings_cache = [];
@@ -1035,7 +1047,14 @@ CSS;
 
         $js = <<<'JS'
 (function(){
+  function normLang(code){
+    var c = (code || '').toString().trim().toLowerCase();
+    if(c === 'ua'){ c = 'uk'; }
+    return c;
+  }
+
   function updateTranslations(lang){
+    lang = normLang(lang);
     var wraps = document.querySelectorAll('.jelyk-card-tr-wrap');
     wraps.forEach(function(w){
       var items = w.querySelectorAll('.jelyk-card-tr');
@@ -1055,15 +1074,17 @@ CSS;
     var sel = document.getElementById('jelyk-lang-select');
     if(!sel) return;
     var saved = null;
-    try { saved = localStorage.getItem('jelykLang') || null; } catch(e) {}
+    try { saved = normLang(localStorage.getItem('jelykLang') || ''); } catch(e) { saved = null; }
     if(saved){
       var opt = sel.querySelector('option[value="'+saved+'"]');
       if(opt) sel.value = saved;
     }
     updateTranslations(sel.value);
     sel.addEventListener('change', function(){
-      try { localStorage.setItem('jelykLang', sel.value); } catch(e) {}
-      updateTranslations(sel.value);
+      var val = normLang(sel.value);
+      sel.value = val || 'de';
+      try { localStorage.setItem('jelykLang', val); } catch(e) {}
+      updateTranslations(val);
     });
   });
 })();
@@ -1163,24 +1184,22 @@ JS;
 
         $translations = [];
         if ( $card_ids ) {
-            $langs = self::get_default_langs(); // only defaults (DE handled separately)
             $cph   = implode( ',', array_fill( 0, count( $card_ids ), '%d' ) );
-            $lph   = implode( ',', array_fill( 0, count( $langs ), '%s' ) );
 
-            $params = array_merge( $card_ids, $langs );
+                        // Fetch all translations for these cards (DE handled separately via sentence_de).
             $rows = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT card_id, lang, text FROM {$tT} WHERE card_id IN ({$cph}) AND lang IN ({$lph})",
-                    $params
+                                        "SELECT card_id, lang, text FROM {$tT} WHERE card_id IN ({$cph})",
+                    $card_ids
                 ),
                 ARRAY_A
             );
 
             foreach ( (array) $rows as $r ) {
                 $cid = (int) $r['card_id'];
-                $lang = (string) $r['lang'];
-                $text = (string) $r['text'];
-                if ( $text === '' ) {
+                                $lang = self::norm_lang( $r['lang'] ?? '' );
+                                $text = trim( (string) ( $r['text'] ?? '' ) );
+                if ( $text === '' || $lang === '' ) {
                     continue;
                 }
                 if ( ! isset( $translations[ $cid ] ) ) {
@@ -1199,14 +1218,20 @@ JS;
 
     protected static function render_frontend_meanings_cards( $post_id, $data ) {
         $title = get_the_title( $post_id );
-		// Build language dropdown entries (DE + default languages)
-		$langs = [];
-		foreach ( array_merge( [ 'de' ], self::get_default_langs() ) as $code ) {
-			$langs[] = [
-				'code'  => $code,
-				'label' => self::lang_label( $code ),
-			];
-		}
+                // Build language dropdown entries (DE + default languages)
+                $langs = [];
+                $seen = [];
+                foreach ( array_merge( [ 'de' ], self::get_default_langs() ) as $code ) {
+                        $norm = self::norm_lang( $code );
+                        if ( $norm === '' || isset( $seen[ $norm ] ) ) {
+                                continue;
+                        }
+                        $seen[ $norm ] = true;
+                        $langs[] = [
+                                'code'  => $norm,
+                                'label' => self::lang_label( $norm ),
+                        ];
+                }
 
         // Prefetch possible internal links for synonyms/antonyms.
         $all_tokens = [];
@@ -1277,10 +1302,10 @@ JS;
                             <div class="jelyk-cards-title"><?php echo esc_html__( 'Beispielsätze', 'jelyk' ); ?></div>
                             <div class="jelyk-cards">
                                 <?php foreach ( $cards as $c ) :
-                                    $cid = (int) $c['id'];
-                                    $img_id = (int) $c['image_id'];
-                                    $sent = (string) $c['sentence_de'];
-                                    $trs  = $data['translations'][ $cid ] ?? [];
+                                    $card_id = (int) ( $c['id'] ?? $c['card_id'] ?? 0 );
+                                    $img_id  = (int) $c['image_id'];
+                                    $sent    = (string) $c['sentence_de'];
+                                    $trs     = $data['translations'][ $card_id ] ?? [];
                                     ?>
                                     <div class="jelyk-card">
                                         <figure>
@@ -1295,8 +1320,13 @@ JS;
 
                                             <?php if ( $trs ) : ?>
                                                 <div class="jelyk-card-tr-wrap" style="display:none">
-                                                    <?php foreach ( $trs as $lang => $txt ) : ?>
-                                                        <p class="jelyk-card-tr" data-lang="<?php echo esc_attr( $lang ); ?>"><?php echo esc_html( $txt ); ?></p>
+                                                    <?php foreach ( $trs as $lang => $txt ) :
+                                                                        $norm_lang = self::norm_lang( $lang );
+                                                                        if ( $norm_lang === '' ) {
+                                                                                continue;
+                                                                        }
+                                                        ?>
+                                                        <p class="jelyk-card-tr" data-lang="<?php echo esc_attr( $norm_lang ); ?>"><?php echo esc_html( $txt ); ?></p>
                                                     <?php endforeach; ?>
                                                 </div>
                                             <?php else : ?>
