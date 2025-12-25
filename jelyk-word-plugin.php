@@ -64,6 +64,7 @@ class Jelyk_Word_Plugin {
         add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_admin_assets' ] );
         add_action( 'admin_menu', [ __CLASS__, 'register_tools_page' ] );
         add_action( 'admin_post_jelyk_cleanup', [ __CLASS__, 'handle_cleanup' ] );
+        add_action( 'admin_post_jelyk_cleanup_preview', [ __CLASS__, 'handle_cleanup_preview' ] );
 
         add_action( 'add_meta_boxes', [ __CLASS__, 'add_meta_boxes' ] );
         add_action( 'save_post', [ __CLASS__, 'save_all' ] );
@@ -1536,6 +1537,17 @@ JS;
         }
 
         $deleted = isset( $_GET['jelyk_deleted'] ) ? (int) $_GET['jelyk_deleted'] : 0;
+        $preview_key = isset( $_GET['jelyk_preview'] ) ? sanitize_text_field( wp_unslash( $_GET['jelyk_preview'] ) ) : '';
+        $error       = isset( $_GET['jelyk_error'] ) ? sanitize_text_field( wp_unslash( $_GET['jelyk_error'] ) ) : '';
+
+        $preview_data = [];
+        if ( $preview_key && get_current_user_id() ) {
+            $preview_data = get_transient( 'jelyk_cleanup_preview_' . get_current_user_id() );
+            delete_transient( 'jelyk_cleanup_preview_' . get_current_user_id() );
+            if ( ! is_array( $preview_data ) ) {
+                $preview_data = [];
+            }
+        }
         ?>
         <div class="wrap">
             <h1><?php esc_html_e( 'Jelyk Cleanup', 'jelyk' ); ?></h1>
@@ -1546,9 +1558,85 @@ JS;
                 <div class="notice notice-info"><p><?php esc_html_e( 'No legacy meta entries were found.', 'jelyk' ); ?></p></div>
             <?php endif; ?>
 
+            <?php if ( 'confirm' === $error ) : ?>
+                <div class="notice notice-error"><p><?php esc_html_e( 'Please confirm that you understand this action will delete data.', 'jelyk' ); ?></p></div>
+            <?php endif; ?>
+
+            <h2><?php esc_html_e( 'Preview legacy data', 'jelyk' ); ?></h2>
+            <p><?php esc_html_e( 'Preview the legacy meta entries targeted for deletion. No data will be removed.', 'jelyk' ); ?></p>
+            <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                <?php wp_nonce_field( 'jelyk_cleanup_preview_action', 'jelyk_cleanup_preview_nonce' ); ?>
+                <input type="hidden" name="action" value="jelyk_cleanup_preview" />
+                <p>
+                    <button type="submit" class="button"><?php esc_html_e( 'Preview legacy data', 'jelyk' ); ?></button>
+                </p>
+            </form>
+
+            <?php if ( ! empty( $preview_data ) ) : ?>
+                <h3><?php esc_html_e( 'Legacy meta keys', 'jelyk' ); ?></h3>
+                <ul>
+                    <?php foreach ( $preview_data['meta_keys'] as $meta_key ) : ?>
+                        <li><?php echo esc_html( $meta_key ); ?></li>
+                    <?php endforeach; ?>
+                </ul>
+
+                <?php if ( ! empty( $preview_data['counts'] ) ) : ?>
+                    <h3><?php esc_html_e( 'Counts by meta key', 'jelyk' ); ?></h3>
+                    <table class="widefat">
+                        <thead>
+                            <tr>
+                                <th><?php esc_html_e( 'Meta key', 'jelyk' ); ?></th>
+                                <th><?php esc_html_e( 'Count', 'jelyk' ); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ( $preview_data['counts'] as $row ) : ?>
+                                <tr>
+                                    <td><?php echo esc_html( $row['meta_key'] ); ?></td>
+                                    <td><?php echo esc_html( $row['count'] ); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php else : ?>
+                    <p><?php esc_html_e( 'No legacy meta entries were found.', 'jelyk' ); ?></p>
+                <?php endif; ?>
+
+                <?php if ( ! empty( $preview_data['samples'] ) ) : ?>
+                    <h3><?php esc_html_e( 'Sample rows', 'jelyk' ); ?></h3>
+                    <table class="widefat">
+                        <thead>
+                            <tr>
+                                <th><?php esc_html_e( 'meta_id', 'jelyk' ); ?></th>
+                                <th><?php esc_html_e( 'post_id', 'jelyk' ); ?></th>
+                                <th><?php esc_html_e( 'meta_key', 'jelyk' ); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ( $preview_data['samples'] as $row ) : ?>
+                                <tr>
+                                    <td><?php echo esc_html( $row['meta_id'] ); ?></td>
+                                    <td><?php echo esc_html( $row['post_id'] ); ?></td>
+                                    <td><?php echo esc_html( $row['meta_key'] ); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            <?php endif; ?>
+
             <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
                 <?php wp_nonce_field( 'jelyk_cleanup_action', 'jelyk_cleanup_nonce' ); ?>
                 <input type="hidden" name="action" value="jelyk_cleanup" />
+                <p>
+                    <label>
+                        <input type="checkbox" name="jelyk_cleanup_confirm" value="1" />
+                        <?php esc_html_e( 'I understand this will delete data.', 'jelyk' ); ?>
+                    </label>
+                </p>
+                <p>
+                    <strong><?php esc_html_e( 'Warning: This action cannot be undone.', 'jelyk' ); ?></strong>
+                </p>
                 <p>
                     <button type="submit" class="button button-primary"><?php esc_html_e( 'Delete legacy data', 'jelyk' ); ?></button>
                 </p>
@@ -1566,12 +1654,53 @@ JS;
             wp_die( esc_html__( 'Invalid request.', 'jelyk' ) );
         }
 
+        if ( empty( $_POST['jelyk_cleanup_confirm'] ) ) {
+            $redirect = add_query_arg(
+                [
+                    'page'         => 'jelyk-cleanup',
+                    'jelyk_error'  => 'confirm',
+                ],
+                admin_url( 'tools.php' )
+            );
+
+            wp_safe_redirect( $redirect );
+            exit;
+        }
+
         $deleted = self::cleanup_legacy_data();
 
         $redirect = add_query_arg(
             [
                 'page'           => 'jelyk-cleanup',
                 'jelyk_deleted'  => $deleted,
+            ],
+            admin_url( 'tools.php' )
+        );
+
+        wp_safe_redirect( $redirect );
+        exit;
+    }
+
+    public static function handle_cleanup_preview() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'You do not have permission to perform this action.', 'jelyk' ) );
+        }
+
+        if ( ! isset( $_POST['jelyk_cleanup_preview_nonce'] ) || ! wp_verify_nonce( $_POST['jelyk_cleanup_preview_nonce'], 'jelyk_cleanup_preview_action' ) ) {
+            wp_die( esc_html__( 'Invalid request.', 'jelyk' ) );
+        }
+
+        $preview_data = self::preview_legacy_data();
+        $user_id      = get_current_user_id();
+
+        if ( $user_id ) {
+            set_transient( 'jelyk_cleanup_preview_' . $user_id, $preview_data, 5 * MINUTE_IN_SECONDS );
+        }
+
+        $redirect = add_query_arg(
+            [
+                'page'          => 'jelyk-cleanup',
+                'jelyk_preview' => 1,
             ],
             admin_url( 'tools.php' )
         );
@@ -1592,6 +1721,34 @@ JS;
         }
 
         return $total_deleted;
+    }
+
+    protected static function preview_legacy_data() {
+        global $wpdb;
+
+        $meta_keys   = self::legacy_meta_keys();
+        $placeholders = implode( ', ', array_fill( 0, count( $meta_keys ), '%s' ) );
+        $table        = $wpdb->postmeta;
+
+        $counts_sql = $wpdb->prepare(
+            "SELECT meta_key, COUNT(*) as count FROM {$table} WHERE meta_key IN ({$placeholders}) GROUP BY meta_key",
+            $meta_keys
+        );
+
+        $counts = $wpdb->get_results( $counts_sql, ARRAY_A );
+
+        $samples_sql = $wpdb->prepare(
+            "SELECT meta_id, post_id, meta_key FROM {$table} WHERE meta_key IN ({$placeholders}) ORDER BY meta_id DESC LIMIT 50",
+            $meta_keys
+        );
+
+        $samples = $wpdb->get_results( $samples_sql, ARRAY_A );
+
+        return [
+            'meta_keys' => $meta_keys,
+            'counts'    => $counts,
+            'samples'   => $samples,
+        ];
     }
 }
 
