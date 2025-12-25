@@ -62,6 +62,8 @@ class Jelyk_Word_Plugin {
 
         add_action( 'admin_init', [ __CLASS__, 'maybe_upgrade' ] );
         add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_admin_assets' ] );
+        add_action( 'admin_menu', [ __CLASS__, 'register_tools_page' ] );
+        add_action( 'admin_post_jelyk_cleanup', [ __CLASS__, 'handle_cleanup' ] );
 
         add_action( 'add_meta_boxes', [ __CLASS__, 'add_meta_boxes' ] );
         add_action( 'save_post', [ __CLASS__, 'save_all' ] );
@@ -399,32 +401,6 @@ CSS;
                 'type'  => 'text',
                 'types' => [ 'adjektiv' ],
                 'description' => 'Напр. "am schnellsten".',
-            ],
-
-            // legacy
-            'meanings' => [
-                'label' => '[LEGACY] Bedeutungen von „%s“ (old)',
-                'type'  => 'textarea',
-                'types' => [ 'all' ],
-                'description' => 'Старе поле. Далі будемо виносити в Bedeutungen & Cards.',
-            ],
-            'synonyms' => [
-                'label' => '[LEGACY] Synonyme von „%s“ (old)',
-                'type'  => 'textarea',
-                'types' => [ 'all' ],
-                'description' => 'Старе поле.',
-            ],
-            'translation' => [
-                'label' => '[LEGACY] Übersetzung von „%s“ (old)',
-                'type'  => 'textarea',
-                'types' => [ 'all' ],
-                'description' => 'Старе поле.',
-            ],
-            'examples' => [
-                'label' => '[LEGACY] Beispielsätze für „%s“ (old)',
-                'type'  => 'textarea',
-                'types' => [ 'all' ],
-                'description' => 'Старе поле.',
             ],
         ];
     }
@@ -1383,9 +1359,6 @@ JS;
         }
 
         foreach ( $fields as $key => $f ) {
-            if ( ! empty( $f['legacy'] ) ) {
-                continue;
-            }
             if ( $key === 'type' ) {
                 continue;
             }
@@ -1532,6 +1505,93 @@ JS;
         if ( isset( $_POST['jelyk_meanings_nonce'] ) ) {
             self::save_meanings_cards( $post_id );
         }
+    }
+
+    /* =========================
+     * Cleanup (legacy data)
+     * ========================= */
+
+    protected static function legacy_meta_keys() {
+        return [
+            self::META_PREFIX . 'meanings',
+            self::META_PREFIX . 'synonyms',
+            self::META_PREFIX . 'translation',
+            self::META_PREFIX . 'examples',
+        ];
+    }
+
+    public static function register_tools_page() {
+        add_management_page(
+            'Jelyk Cleanup',
+            'Jelyk Cleanup',
+            'manage_options',
+            'jelyk-cleanup',
+            [ __CLASS__, 'render_cleanup_page' ]
+        );
+    }
+
+    public static function render_cleanup_page() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'You do not have permission to access this page.', 'jelyk' ) );
+        }
+
+        $deleted = isset( $_GET['jelyk_deleted'] ) ? (int) $_GET['jelyk_deleted'] : 0;
+        ?>
+        <div class="wrap">
+            <h1><?php esc_html_e( 'Jelyk Cleanup', 'jelyk' ); ?></h1>
+            <p><?php esc_html_e( 'Delete legacy meta fields from posts. This will not drop any tables or columns.', 'jelyk' ); ?></p>
+            <?php if ( $deleted > 0 ) : ?>
+                <div class="notice notice-success"><p><?php echo esc_html( sprintf( __( 'Deleted %d legacy meta entries.', 'jelyk' ), $deleted ) ); ?></p></div>
+            <?php elseif ( isset( $_GET['jelyk_deleted'] ) ) : ?>
+                <div class="notice notice-info"><p><?php esc_html_e( 'No legacy meta entries were found.', 'jelyk' ); ?></p></div>
+            <?php endif; ?>
+
+            <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                <?php wp_nonce_field( 'jelyk_cleanup_action', 'jelyk_cleanup_nonce' ); ?>
+                <input type="hidden" name="action" value="jelyk_cleanup" />
+                <p>
+                    <button type="submit" class="button button-primary"><?php esc_html_e( 'Delete legacy data', 'jelyk' ); ?></button>
+                </p>
+            </form>
+        </div>
+        <?php
+    }
+
+    public static function handle_cleanup() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'You do not have permission to perform this action.', 'jelyk' ) );
+        }
+
+        if ( ! isset( $_POST['jelyk_cleanup_nonce'] ) || ! wp_verify_nonce( $_POST['jelyk_cleanup_nonce'], 'jelyk_cleanup_action' ) ) {
+            wp_die( esc_html__( 'Invalid request.', 'jelyk' ) );
+        }
+
+        $deleted = self::cleanup_legacy_data();
+
+        $redirect = add_query_arg(
+            [
+                'page'           => 'jelyk-cleanup',
+                'jelyk_deleted'  => $deleted,
+            ],
+            admin_url( 'tools.php' )
+        );
+
+        wp_safe_redirect( $redirect );
+        exit;
+    }
+
+    protected static function cleanup_legacy_data() {
+        global $wpdb;
+
+        $total_deleted = 0;
+        $table = $wpdb->postmeta;
+
+        foreach ( self::legacy_meta_keys() as $key ) {
+            $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE meta_key = %s", $key ) );
+            $total_deleted += (int) $wpdb->rows_affected;
+        }
+
+        return $total_deleted;
     }
 }
 
