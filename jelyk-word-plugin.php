@@ -1063,7 +1063,7 @@ CSS;
       var active = w.querySelector('.jelyk-card-tr[data-lang="'+lang+'"]');
       if(active && active.textContent.trim().length){
         w.style.display = '';
-        active.style.display = '';
+        active.style.display = 'block';
       } else {
         w.style.display = 'none';
       }
@@ -1232,6 +1232,7 @@ JS;
                                 'label' => self::lang_label( $norm ),
                         ];
                 }
+                $active_lang = (string) ( $langs[0]['code'] ?? '' );
 
         // Prefetch possible internal links for synonyms/antonyms.
         $all_tokens = [];
@@ -1319,14 +1320,32 @@ JS;
                                             <p class="jelyk-card-de"><?php echo esc_html( $sent ); ?></p>
 
                                             <?php if ( $trs ) : ?>
-                                                <div class="jelyk-card-tr-wrap" style="display:none">
-                                                    <?php foreach ( $trs as $lang => $txt ) :
-                                                                        $norm_lang = self::norm_lang( $lang );
-                                                                        if ( $norm_lang === '' ) {
-                                                                                continue;
-                                                                        }
+                                                <?php
+                                                $normalized_trs = [];
+                                                foreach ( (array) $trs as $lang => $txt ) {
+                                                        $norm_lang = self::norm_lang( $lang );
+                                                        if ( $norm_lang === '' ) {
+                                                                continue;
+                                                        }
+                                                        $normalized_trs[ $norm_lang ] = $txt;
+                                                }
+
+                                                $has_active_translation = false;
+                                                if ( $active_lang !== '' && $active_lang !== 'de' ) {
+                                                        $active_txt = $normalized_trs[ $active_lang ] ?? '';
+                                                        if ( trim( (string) $active_txt ) !== '' ) {
+                                                                $has_active_translation = true;
+                                                        }
+                                                }
+
+                                                $wrap_style = $has_active_translation ? 'display:block;' : 'display:none;';
+                                                ?>
+                                                <div class="jelyk-card-tr-wrap" style="<?php echo esc_attr( $wrap_style ); ?>">
+                                                    <?php foreach ( $normalized_trs as $norm_lang => $txt ) :
+                                                            $is_active = $has_active_translation && $norm_lang === $active_lang;
+                                                            $display_style = $is_active ? 'display:block;' : 'display:none;';
                                                         ?>
-                                                        <p class="jelyk-card-tr" data-lang="<?php echo esc_attr( $norm_lang ); ?>"><?php echo esc_html( $txt ); ?></p>
+                                                        <p class="jelyk-card-tr" data-lang="<?php echo esc_attr( $norm_lang ); ?>" style="<?php echo esc_attr( $display_style ); ?>"><?php echo esc_html( $txt ); ?></p>
                                                     <?php endforeach; ?>
                                                 </div>
                                             <?php else : ?>
