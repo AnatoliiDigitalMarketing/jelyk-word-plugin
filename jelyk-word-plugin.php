@@ -13,8 +13,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Jelyk_Word_Plugin {
 
     const META_PREFIX = '_jelyk_';
-    const DB_VERSION  = 1;
-	const VERSION     = '0.2.14';
+    const DB_VERSION  = 2;
+        const VERSION     = '0.2.14';
+        const DB_VERSION_OPTION = 'jelyk_db_version';
 
     // Мови, які зберігаємо “з коробки”. (DE = базова мова речення, тому тут не потрібно)
     // Важливо: українська стандартно = 'uk' (а не 'ua' / 'UK').
@@ -60,6 +61,7 @@ class Jelyk_Word_Plugin {
     public static function init() {
         register_activation_hook( __FILE__, [ __CLASS__, 'on_activate' ] );
 
+        add_action( 'plugins_loaded', [ __CLASS__, 'maybe_upgrade' ] );
         add_action( 'admin_init', [ __CLASS__, 'maybe_upgrade' ] );
         add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_admin_assets' ] );
         add_action( 'admin_menu', [ __CLASS__, 'register_tools_page' ] );
@@ -124,17 +126,29 @@ class Jelyk_Word_Plugin {
         return $wpdb->prefix . 'jelyk_card_translations';
     }
 
+        protected static function table_meaning_translations() {
+                global $wpdb;
+                return $wpdb->prefix . 'jelyk_meaning_translations';
+        }
+
     public static function on_activate() {
         self::create_tables();
-        update_option( 'jelyk_word_plugin_db_version', self::DB_VERSION );
+                update_option( self::DB_VERSION_OPTION, self::DB_VERSION );
+                update_option( 'jelyk_word_plugin_db_version', self::DB_VERSION );
     }
 
     public static function maybe_upgrade() {
-        $v = (int) get_option( 'jelyk_word_plugin_db_version', 0 );
-        if ( $v < self::DB_VERSION ) {
-            self::create_tables();
-            update_option( 'jelyk_word_plugin_db_version', self::DB_VERSION );
-        }
+                $stored_versions = [
+                        (int) get_option( self::DB_VERSION_OPTION, 0 ),
+                        (int) get_option( 'jelyk_word_plugin_db_version', 0 ),
+                ];
+                $v = max( $stored_versions );
+
+                if ( $v < self::DB_VERSION ) {
+                        self::create_tables();
+                        update_option( self::DB_VERSION_OPTION, self::DB_VERSION );
+                        update_option( 'jelyk_word_plugin_db_version', self::DB_VERSION );
+                }
     }
 
     protected static function create_tables() {
@@ -146,6 +160,7 @@ class Jelyk_Word_Plugin {
         $t_meanings = self::table_meanings();
         $t_cards    = self::table_cards();
         $t_tr       = self::table_translations();
+                $t_mtr      = self::table_meaning_translations();
 
         $sql_meanings = "CREATE TABLE {$t_meanings} (
             meaning_id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -189,9 +204,26 @@ class Jelyk_Word_Plugin {
             KEY status (status)
         ) {$charset_collate};";
 
+                $sql_mtr = "CREATE TABLE {$t_mtr} (
+                        id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                        meaning_id BIGINT(20) UNSIGNED NOT NULL,
+                        field VARCHAR(50) NOT NULL,
+                        lang VARCHAR(10) NOT NULL,
+                        text TEXT NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                        source VARCHAR(20) NULL,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY meaning_field_lang (meaning_id, field, lang),
+                        KEY meaning_id (meaning_id),
+                        KEY lang (lang),
+                        KEY status (status)
+                ) {$charset_collate};";
+
         dbDelta( $sql_meanings );
         dbDelta( $sql_cards );
         dbDelta( $sql_tr );
+                dbDelta( $sql_mtr );
     }
 
     public static function get_default_langs() {
@@ -549,6 +581,29 @@ CSS;
         return $out;
     }
 
+        protected static function fetch_meaning_translations( $meaning_id, $field = 'gloss' ) {
+                global $wpdb;
+                $t = self::table_meaning_translations();
+                $rows = $wpdb->get_results(
+                        $wpdb->prepare( "SELECT lang, text, status FROM {$t} WHERE meaning_id=%d AND field=%s", $meaning_id, $field ),
+                        ARRAY_A
+                );
+
+                $out = [];
+                foreach ( (array) $rows as $r ) {
+                        $lang = isset( $r['lang'] ) ? self::norm_lang( $r['lang'] ) : '';
+                        if ( $lang === '' ) {
+                                continue;
+                        }
+                        $out[ $lang ] = [
+                                'text'   => (string) ( $r['text'] ?? '' ),
+                                'status' => (string) ( $r['status'] ?? '' ),
+                        ];
+                }
+
+                return $out;
+        }
+
     public static function render_meanings_cards_box( $post ) {
         wp_nonce_field( 'jelyk_meanings_save', 'jelyk_meanings_nonce' );
 
@@ -564,10 +619,11 @@ CSS;
         }
 
         foreach ( $meanings as $m ) {
-            $meaning_id  = (int) $m['meaning_id'];
-            $meaning_key = 'm' . $meaning_id;
-            $cards       = self::fetch_cards_for_meaning( $meaning_id );
-            echo self::render_meaning_block( $meaning_key, $m, $cards, $langs );
+            $meaning_id        = (int) $m['meaning_id'];
+            $meaning_key       = 'm' . $meaning_id;
+                        $gloss_translations = self::fetch_meaning_translations( $meaning_id );
+            $cards             = self::fetch_cards_for_meaning( $meaning_id );
+            echo self::render_meaning_block( $meaning_key, $m, $cards, $langs, $gloss_translations );
         }
 
         echo '</div>';
@@ -582,7 +638,7 @@ CSS;
             'usage_note_de'  => '',
             'synonyms'       => '',
             'antonyms'       => '',
-        ], [], $langs, true );
+        ], [], $langs, [], true );
         echo '</script>';
 
         echo '<script type="text/html" id="jelyk-card-template">';
@@ -595,13 +651,14 @@ CSS;
         echo '</script>';
     }
 
-    protected static function render_meaning_block( $meaning_key, $meaning_row, $cards, $langs, $is_template = false ) {
+    protected static function render_meaning_block( $meaning_key, $meaning_row, $cards, $langs, $meaning_translations = [], $is_template = false ) {
         $meaning_id    = isset( $meaning_row['meaning_id'] ) ? (int) $meaning_row['meaning_id'] : 0;
         $order         = isset( $meaning_row['meaning_order'] ) ? (int) $meaning_row['meaning_order'] : 0;
         $gloss_de      = isset( $meaning_row['gloss_de'] ) ? (string) $meaning_row['gloss_de'] : '';
         $usage_note_de = isset( $meaning_row['usage_note_de'] ) ? (string) $meaning_row['usage_note_de'] : '';
         $synonyms      = isset( $meaning_row['synonyms'] ) ? (string) $meaning_row['synonyms'] : '';
         $antonyms      = isset( $meaning_row['antonyms'] ) ? (string) $meaning_row['antonyms'] : '';
+                $meaning_tr    = is_array( $meaning_translations ) ? $meaning_translations : [];
 
         $html  = '<div class="jelyk-meaning" data-meaning-key="' . esc_attr( $meaning_key ) . '">';
         $html .= '<div class="jelyk-meaning-head">';
@@ -624,6 +681,19 @@ CSS;
         $html .= '<p class="description">Коротко німецькою (те, що в тебе “Etwas …”).</p>';
         $html .= '</div>';
         $html .= '</div>';
+
+                $gloss_langs = [ 'uk', 'en' ];
+                $html       .= '<div class="jelyk-row">';
+                foreach ( $gloss_langs as $gl_lang ) {
+                        $norm_lang = self::norm_lang( $gl_lang );
+                        $existing  = $meaning_tr[ $norm_lang ]['text'] ?? '';
+                        $label     = sprintf( 'Gloss (%s)', strtoupper( $norm_lang ) );
+                        $html     .= '<div class="jelyk-col">';
+                        $html     .= '<label>' . esc_html( $label ) . '</label>';
+                        $html     .= '<textarea name="jelyk_meanings[' . esc_attr( $meaning_key ) . '][gloss_tr][' . esc_attr( $norm_lang ) . ']" rows="2">' . esc_textarea( $existing ) . '</textarea>';
+                        $html     .= '</div>';
+                }
+                $html .= '</div>';
 
         $html .= '<div class="jelyk-row">';
         $html .= '<div class="jelyk-col">';
@@ -744,6 +814,51 @@ CSS;
         $wpdb->delete( $t, [ 'card_id' => (int) $card_id ], [ '%d' ] );
     }
 
+        protected static function upsert_meaning_translation( $meaning_id, $field, $lang, $text, $status = 'manual', $source = 'manual' ) {
+                global $wpdb;
+                $t = self::table_meaning_translations();
+
+                $lang  = self::norm_lang( $lang );
+                $field = trim( (string) $field );
+
+                if ( $meaning_id <= 0 || $lang === '' || $field === '' ) {
+                        return;
+                }
+
+                $wpdb->replace(
+                        $t,
+                        [
+                                'meaning_id' => $meaning_id,
+                                'field'      => $field,
+                                'lang'       => $lang,
+                                'text'       => $text,
+                                'status'     => $status,
+                                'source'     => $source,
+                        ],
+                        [ '%d', '%s', '%s', '%s', '%s', '%s' ]
+                );
+        }
+
+        protected static function delete_meaning_translation( $meaning_id, $field, $lang ) {
+                global $wpdb;
+                $t = self::table_meaning_translations();
+                $wpdb->delete(
+                        $t,
+                        [
+                                'meaning_id' => (int) $meaning_id,
+                                'field'      => (string) $field,
+                                'lang'       => (string) self::norm_lang( $lang ),
+                        ],
+                        [ '%d', '%s', '%s' ]
+                );
+        }
+
+        protected static function delete_meaning_translations_for_meaning( $meaning_id ) {
+                global $wpdb;
+                $t = self::table_meaning_translations();
+                $wpdb->delete( $t, [ 'meaning_id' => (int) $meaning_id ], [ '%d' ] );
+        }
+
     protected static function delete_meaning_cascade( $meaning_id ) {
         global $wpdb;
         $tM = self::table_meanings();
@@ -756,6 +871,7 @@ CSS;
             self::delete_translations_for_card( (int) $cid );
         }
         $wpdb->delete( $tC, [ 'meaning_id' => (int) $meaning_id ], [ '%d' ] );
+                self::delete_meaning_translations_for_meaning( (int) $meaning_id );
         $wpdb->delete( $tM, [ 'meaning_id' => (int) $meaning_id ], [ '%d' ] );
     }
 
@@ -841,6 +957,25 @@ CSS;
             }
 
             $kept_meanings[] = $meaning_id;
+
+                        $gloss_input = [];
+                        if ( isset( $m['gloss_tr'] ) && is_array( $m['gloss_tr'] ) ) {
+                                $gloss_input = $m['gloss_tr'];
+                        }
+
+                        foreach ( [ 'uk', 'en' ] as $g_lang ) {
+                                $norm_lang = self::norm_lang( $g_lang );
+                                $val       = '';
+                                if ( isset( $gloss_input[ $norm_lang ] ) ) {
+                                        $val = sanitize_textarea_field( $gloss_input[ $norm_lang ] );
+                                }
+
+                                if ( trim( $val ) !== '' ) {
+                                        self::upsert_meaning_translation( $meaning_id, 'gloss', $norm_lang, $val, 'manual', 'manual' );
+                                } else {
+                                        self::delete_meaning_translation( $meaning_id, 'gloss', $norm_lang );
+                                }
+                        }
 
             $existing_cards = $wpdb->get_col(
                 $wpdb->prepare( "SELECT card_id FROM {$tC} WHERE meaning_id=%d", $meaning_id )
@@ -998,6 +1133,7 @@ CSS;
 .jelyk-meaning{margin:1.75rem 0 0 0;padding:0}
 .jelyk-meaning-title{margin:0 0 .35rem 0;font-weight:700}
 .jelyk-meaning-gloss{margin:0 0 .75rem 0;font-size:1.05em}
+.jelyk-meaning-tr{display:none;margin:.1rem 0 .6rem 0;font-size:1.02em;opacity:.92}
 .jelyk-hr{border:0;border-top:1px solid rgba(0,0,0,.12);margin:.75rem 0 1rem 0}
 .jelyk-row{margin:0 0 1rem 0}
 .jelyk-row-title{font-weight:700;margin:0 0 .35rem 0}
@@ -1039,10 +1175,20 @@ CSS;
       if(!lang || lang==='de'){ w.style.display = 'none'; return; }
       var active = w.querySelector('.jelyk-card-tr[data-lang="'+lang+'"]');
       if(active && active.textContent.trim().length){
-        w.style.display = '';
+        w.style.display = 'block';
         active.style.display = 'block';
       } else {
         w.style.display = 'none';
+      }
+    });
+
+    var meaningEls = document.querySelectorAll('.jelyk-meaning-tr');
+    meaningEls.forEach(function(el){
+      var elLang = normLang(el.getAttribute('data-lang'));
+      if(!lang || lang === 'de' || elLang !== lang || !el.textContent.trim().length){
+        el.style.display = 'none';
+      } else {
+        el.style.display = 'block';
       }
     });
   }
@@ -1120,9 +1266,10 @@ JS;
         global $wpdb;
 
 		// Use helpers (they include $wpdb->prefix).
-		$tM = self::table_meanings();
-		$tC = self::table_cards();
-		$tT = self::table_translations();
+                $tM = self::table_meanings();
+                $tC = self::table_cards();
+                $tT = self::table_translations();
+                $tMT = self::table_meaning_translations();
 
         $meanings = $wpdb->get_results(
             $wpdb->prepare(
@@ -1133,7 +1280,7 @@ JS;
         );
 
         if ( ! $meanings ) {
-            return [ 'meanings' => [], 'cards_by_meaning' => [], 'translations' => [] ];
+            return [ 'meanings' => [], 'cards_by_meaning' => [], 'translations' => [], 'meaning_translations' => [] ];
         }
 
         $meaning_ids = array_map( 'intval', array_column( $meanings, 'id' ) );
@@ -1160,6 +1307,31 @@ JS;
         }
 
         $translations = [];
+                $meaning_translations = [];
+
+                if ( $meaning_ids ) {
+                        $mph   = implode( ',', array_fill( 0, count( $meaning_ids ), '%d' ) );
+                        $query = $wpdb->prepare(
+                                "SELECT meaning_id, lang, text, status FROM {$tMT} WHERE meaning_id IN ({$mph}) AND field=%s AND TRIM(text) <> ''",
+                                array_merge( $meaning_ids, [ 'gloss' ] )
+                        );
+
+                        $mrows = $wpdb->get_results( $query, ARRAY_A );
+
+                        foreach ( (array) $mrows as $mr ) {
+                                $mid  = (int) ( $mr['meaning_id'] ?? 0 );
+                                $lang = self::norm_lang( $mr['lang'] ?? '' );
+                                $text = trim( (string) ( $mr['text'] ?? '' ) );
+                                if ( $mid <= 0 || $lang === '' || $text === '' ) {
+                                        continue;
+                                }
+                                if ( ! isset( $meaning_translations[ $mid ] ) ) {
+                                        $meaning_translations[ $mid ] = [];
+                                }
+                                $meaning_translations[ $mid ][ $lang ] = $text;
+                        }
+                }
+
         if ( $card_ids ) {
             $cph   = implode( ',', array_fill( 0, count( $card_ids ), '%d' ) );
 
@@ -1190,6 +1362,7 @@ JS;
             'meanings'         => $meanings,
             'cards_by_meaning' => $cards_by_meaning,
             'translations'     => $translations,
+                        'meaning_translations' => $meaning_translations,
         ];
     }
 
@@ -1242,12 +1415,35 @@ JS;
                 $syn   = (string) ( $m['synonyms'] ?? '' );
                 $ant   = (string) ( $m['antonyms'] ?? '' );
                 $note  = (string) ( $m['note_de'] ?? '' );
-                $cards = $data['cards_by_meaning'][ $mid ] ?? [];
+                                $meaning_trs = $data['meaning_translations'][ $mid ] ?? [];
+                                $cards = $data['cards_by_meaning'][ $mid ] ?? [];
                 ?>
                 <div class="jelyk-meaning">
                     <h3 class="jelyk-meaning-title"><?php echo esc_html( self::meaning_heading_de( $idx, $m ) ); ?></h3>
 
                     <hr class="jelyk-hr" />
+
+                                        <?php if ( trim( $gloss ) !== '' ) : ?>
+                                                <p class="jelyk-meaning-gloss"><?php echo esc_html( $gloss ); ?></p>
+                                                <?php
+                                                $normalized_gloss_trs = [];
+                                                foreach ( (array) $meaning_trs as $lang => $txt ) {
+                                                        $norm_lang = self::norm_lang( $lang );
+                                                        $clean_txt = trim( (string) $txt );
+                                                        if ( $norm_lang === '' || $clean_txt === '' ) {
+                                                                continue;
+                                                        }
+                                                        $normalized_gloss_trs[ $norm_lang ] = $clean_txt;
+                                                }
+
+                                                if ( $normalized_gloss_trs ) :
+                                                        foreach ( $normalized_gloss_trs as $lang_code => $txt ) :
+                                                                $display_style = ( $active_lang === $lang_code && $active_lang !== 'de' ) ? 'display:block;' : 'display:none;';
+                                                                ?>
+                                                                <div class="jelyk-meaning-tr" data-lang="<?php echo esc_attr( $lang_code ); ?>" style="<?php echo esc_attr( $display_style ); ?>"><?php echo esc_html( $txt ); ?></div>
+                                                        <?php endforeach; ?>
+                                                <?php endif; ?>
+                                        <?php endif; ?>
 
                     <?php if ( trim( $syn ) !== '' ) : ?>
                         <div class="jelyk-row">
