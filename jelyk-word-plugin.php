@@ -343,6 +343,9 @@ JS;
 .jelyk-translations { display:none; margin-top:10px; padding:10px; background:#f6f7f7; border-radius:8px; border:1px dashed #c3c4c7; }
 .jelyk-translations .jelyk-trans-row { display:flex; gap:10px; align-items:center; margin:6px 0; }
 .jelyk-translations .jelyk-trans-row code { min-width:44px; display:inline-block; }
+.jelyk-meaning-translations { margin-top:8px; }
+.jelyk-meaning-translations summary { cursor:pointer; font-weight:600; }
+.jelyk-admin-translation-box { margin-top:8px; padding:10px; background:#f8f9fa; border:1px solid #dcdcde; border-radius:8px; }
 CSS;
 
         wp_register_style( 'jelyk-word-admin-css', false );
@@ -682,18 +685,36 @@ CSS;
         $html .= '</div>';
         $html .= '</div>';
 
-                $gloss_langs = [ 'uk', 'en' ];
-                $html       .= '<div class="jelyk-row">';
-                foreach ( $gloss_langs as $gl_lang ) {
-                        $norm_lang = self::norm_lang( $gl_lang );
-                        $existing  = $meaning_tr[ $norm_lang ]['text'] ?? '';
-                        $label     = sprintf( 'Gloss (%s)', strtoupper( $norm_lang ) );
-                        $html     .= '<div class="jelyk-col">';
-                        $html     .= '<label>' . esc_html( $label ) . '</label>';
-                        $html     .= '<textarea name="jelyk_meanings[' . esc_attr( $meaning_key ) . '][gloss_tr][' . esc_attr( $norm_lang ) . ']" rows="2">' . esc_textarea( $existing ) . '</textarea>';
-                        $html     .= '</div>';
+                $translation_langs = [];
+                foreach ( (array) $langs as $code ) {
+                        $norm = self::norm_lang( $code );
+                        if ( $norm === '' || $norm === 'de' ) {
+                                continue;
+                        }
+                        if ( in_array( $norm, $translation_langs, true ) ) {
+                                continue;
+                        }
+                        $translation_langs[] = $norm;
                 }
-                $html .= '</div>';
+
+                if ( $translation_langs ) {
+                        $html .= '<details class="jelyk-meaning-translations">';
+                        $html .= '<summary>Gloss translations</summary>';
+                        $html .= '<div class="jelyk-admin-translation-box">';
+                        $html .= '<div class="jelyk-row">';
+                        foreach ( $translation_langs as $gl_lang ) {
+                                $norm_lang = self::norm_lang( $gl_lang );
+                                $existing  = $meaning_tr[ $norm_lang ]['text'] ?? '';
+                                $label     = sprintf( 'Gloss (%s)', strtoupper( $norm_lang ) );
+                                $html     .= '<div class="jelyk-col">';
+                                $html     .= '<label>' . esc_html( $label ) . '</label>';
+                                $html     .= '<textarea name="jelyk_meanings[' . esc_attr( $meaning_key ) . '][gloss_tr][' . esc_attr( $norm_lang ) . ']" rows="2">' . esc_textarea( $existing ) . '</textarea>';
+                                $html     .= '</div>';
+                        }
+                        $html .= '</div>';
+                        $html .= '</div>';
+                        $html .= '</details>';
+                }
 
         $html .= '<div class="jelyk-row">';
         $html .= '<div class="jelyk-col">';
@@ -958,24 +979,37 @@ CSS;
 
             $kept_meanings[] = $meaning_id;
 
-                        $gloss_input = [];
-                        if ( isset( $m['gloss_tr'] ) && is_array( $m['gloss_tr'] ) ) {
-                                $gloss_input = $m['gloss_tr'];
-                        }
+            $gloss_input = [];
+            if ( isset( $m['gloss_tr'] ) && is_array( $m['gloss_tr'] ) ) {
+                $gloss_input = $m['gloss_tr'];
+            }
 
-                        foreach ( [ 'uk', 'en' ] as $g_lang ) {
-                                $norm_lang = self::norm_lang( $g_lang );
-                                $val       = '';
-                                if ( isset( $gloss_input[ $norm_lang ] ) ) {
-                                        $val = sanitize_textarea_field( $gloss_input[ $norm_lang ] );
-                                }
+            $translation_langs = [];
+            foreach ( (array) $default_langs as $code ) {
+                $norm = self::norm_lang( $code );
+                if ( $norm === '' || $norm === 'de' ) {
+                    continue;
+                }
+                if ( in_array( $norm, $translation_langs, true ) ) {
+                    continue;
+                }
+                $translation_langs[] = $norm;
+            }
 
-                                if ( trim( $val ) !== '' ) {
-                                        self::upsert_meaning_translation( $meaning_id, 'gloss', $norm_lang, $val, 'manual', 'manual' );
-                                } else {
-                                        self::delete_meaning_translation( $meaning_id, 'gloss', $norm_lang );
-                                }
-                        }
+            foreach ( $translation_langs as $g_lang ) {
+                $norm_lang = self::norm_lang( $g_lang );
+                $val       = '';
+                if ( isset( $gloss_input[ $norm_lang ] ) ) {
+                    $val = sanitize_textarea_field( $gloss_input[ $norm_lang ] );
+                }
+                $val = trim( $val );
+
+                if ( $val !== '' ) {
+                    self::upsert_meaning_translation( $meaning_id, 'gloss', $norm_lang, $val, 'manual', 'manual' );
+                } else {
+                    self::delete_meaning_translation( $meaning_id, 'gloss', $norm_lang );
+                }
+            }
 
             $existing_cards = $wpdb->get_col(
                 $wpdb->prepare( "SELECT card_id FROM {$tC} WHERE meaning_id=%d", $meaning_id )
@@ -1430,7 +1464,7 @@ JS;
                                                 foreach ( (array) $meaning_trs as $lang => $txt ) {
                                                         $norm_lang = self::norm_lang( $lang );
                                                         $clean_txt = trim( (string) $txt );
-                                                        if ( $norm_lang === '' || $clean_txt === '' ) {
+                                                        if ( $norm_lang === '' || $norm_lang === 'de' || $clean_txt === '' ) {
                                                                 continue;
                                                         }
                                                         $normalized_gloss_trs[ $norm_lang ] = $clean_txt;
@@ -1588,13 +1622,6 @@ JS;
     }
 
     protected static function meaning_heading_de( $index, $meaning ) {
-        $gloss = '';
-        if ( is_array( $meaning ) ) {
-            $gloss = trim( (string) ( $meaning['gloss_de'] ?? '' ) );
-        }
-        if ( $gloss !== '' ) {
-            return sprintf( 'Bedeutung %d: %s', (int) $index, $gloss );
-        }
         return sprintf( 'Bedeutung %d', (int) $index );
     }
 
