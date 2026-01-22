@@ -239,6 +239,12 @@ class Jelyk_Word_Plugin {
             return;
         }
 
+        $screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+        $post_type = $screen && ! empty( $screen->post_type ) ? $screen->post_type : null;
+        if ( 'post' !== $post_type ) {
+            return;
+        }
+
         wp_enqueue_media();
         wp_enqueue_script( 'jquery' );
 
@@ -246,111 +252,19 @@ class Jelyk_Word_Plugin {
             'langs'  => self::get_default_langs(),
         ];
 
-        wp_register_script( 'jelyk-word-admin', '', [], '0.2.0', true );
+        $admin_js_path  = plugin_dir_path( __FILE__ ) . 'assets/jelyk-word-admin.js';
+        $admin_css_path = plugin_dir_path( __FILE__ ) . 'assets/jelyk-word-admin.css';
+        $admin_js_url   = plugin_dir_url( __FILE__ ) . 'assets/jelyk-word-admin.js';
+        $admin_css_url  = plugin_dir_url( __FILE__ ) . 'assets/jelyk-word-admin.css';
+        $admin_js_ver   = file_exists( $admin_js_path ) ? filemtime( $admin_js_path ) : self::VERSION;
+        $admin_css_ver  = file_exists( $admin_css_path ) ? filemtime( $admin_css_path ) : self::VERSION;
+
+        wp_register_script( 'jelyk-word-admin', $admin_js_url, [ 'jquery' ], $admin_js_ver, true );
         wp_enqueue_script( 'jelyk-word-admin' );
         wp_add_inline_script( 'jelyk-word-admin', 'window.JELYK_WORD=' . wp_json_encode( $data ) . ';', 'before' );
 
-        // Use NOWDOC to avoid PHP variable interpolation (e.g. $meaning, $card) inside JS.
-        $js = <<<'JS'
-(function($){
-  function uid(prefix){ return prefix + '_' + Math.random().toString(36).slice(2,10); }
-
-  $(document).on('click', '.jelyk-add-meaning', function(e){
-    e.preventDefault();
-    var meaningKey = uid('newm');
-    var tpl = $('#jelyk-meaning-template').html().replaceAll('__MEANING_KEY__', meaningKey);
-    $('.jelyk-meanings-wrap').append(tpl);
-  });
-
-  $(document).on('click', '.jelyk-remove-meaning', function(e){
-    e.preventDefault();
-    if(!confirm('Видалити це значення (Bedeutung) разом з усіма Cards?')) return;
-    $(this).closest('.jelyk-meaning').remove();
-  });
-
-  $(document).on('click', '.jelyk-add-card', function(e){
-    e.preventDefault();
-    var $meaning = $(this).closest('.jelyk-meaning');
-    var meaningKey = $meaning.data('meaning-key');
-    var cardKey = uid('newc');
-    var tpl = $('#jelyk-card-template').html()
-      .replaceAll('__MEANING_KEY__', meaningKey)
-      .replaceAll('__CARD_KEY__', cardKey);
-    $meaning.find('.jelyk-cards-wrap').append(tpl);
-  });
-
-  $(document).on('click', '.jelyk-remove-card', function(e){
-    e.preventDefault();
-    if(!confirm('Видалити цю картку?')) return;
-    $(this).closest('.jelyk-card').remove();
-  });
-
-  $(document).on('click', '.jelyk-toggle-translations', function(e){
-    e.preventDefault();
-    $(this).closest('.jelyk-card').find('.jelyk-translations').toggle();
-  });
-
-  var frame;
-  $(document).on('click', '.jelyk-pick-image', function(e){
-    e.preventDefault();
-    var $card = $(this).closest('.jelyk-card');
-    var $input = $card.find('.jelyk-image-id');
-    var $preview = $card.find('.jelyk-image-preview');
-
-    frame = wp.media({
-      title: 'Оберіть зображення для Card',
-      button: { text: 'Вибрати' },
-      multiple: false
-    });
-
-    frame.on('select', function(){
-      var attachment = frame.state().get('selection').first().toJSON();
-      $input.val(attachment.id);
-      if(attachment.sizes && attachment.sizes.thumbnail){
-        $preview.html('<img src="'+attachment.sizes.thumbnail.url+'" style="max-width:140px;height:auto;" />');
-      } else {
-        $preview.html('<img src="'+attachment.url+'" style="max-width:140px;height:auto;" />');
-      }
-    });
-
-    frame.open();
-  });
-
-  $(document).on('click', '.jelyk-clear-image', function(e){
-    e.preventDefault();
-    var $card = $(this).closest('.jelyk-card');
-    $card.find('.jelyk-image-id').val('');
-    $card.find('.jelyk-image-preview').html('');
-  });
-})(jQuery);
-JS;
-
-        wp_add_inline_script( 'jelyk-word-admin', $js, 'after' );
-
-        $css = <<<CSS
-.jelyk-meaning, .jelyk-card { background:#fff; border:1px solid #dcdcde; border-radius:8px; padding:12px; margin:12px 0; }
-.jelyk-meaning-head { display:flex; justify-content:space-between; align-items:center; gap:12px; }
-.jelyk-meaning-title { font-weight:700; font-size:14px; }
-.jelyk-row { display:flex; gap:12px; flex-wrap:wrap; margin-top:10px; }
-.jelyk-col { flex:1 1 320px; min-width:260px; }
-.jelyk-col label { display:block; font-weight:600; margin-bottom:6px; }
-.jelyk-col input[type="text"], .jelyk-col textarea { width:100%; }
-.jelyk-cards-wrap { margin-top:10px; }
-.jelyk-card-head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
-.jelyk-card-head strong { font-size:13px; }
-.jelyk-actions a.button-link-delete { color:#b32d2e; }
-.jelyk-image-preview img { border-radius:6px; border:1px solid #e5e5e5; }
-.jelyk-translations { display:none; margin-top:10px; padding:10px; background:#f6f7f7; border-radius:8px; border:1px dashed #c3c4c7; }
-.jelyk-translations .jelyk-trans-row { display:flex; gap:10px; align-items:center; margin:6px 0; }
-.jelyk-translations .jelyk-trans-row code { min-width:44px; display:inline-block; }
-.jelyk-meaning-translations { margin-top:8px; }
-.jelyk-meaning-translations summary { cursor:pointer; font-weight:600; }
-.jelyk-admin-translation-box { margin-top:8px; padding:10px; background:#f8f9fa; border:1px solid #dcdcde; border-radius:8px; }
-CSS;
-
-        wp_register_style( 'jelyk-word-admin-css', false );
+        wp_register_style( 'jelyk-word-admin-css', $admin_css_url, [], $admin_css_ver );
         wp_enqueue_style( 'jelyk-word-admin-css' );
-        wp_add_inline_style( 'jelyk-word-admin-css', $css );
     }
 
     /* =========================
