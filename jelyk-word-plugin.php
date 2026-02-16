@@ -1062,8 +1062,13 @@ class Jelyk_Word_Plugin {
 	}
 
     public static function frontend_assets() {
-        // Load only on single posts.
+        // Load only on single post pages where the plugin can render.
         if ( is_admin() || ! is_singular( 'post' ) ) {
+            return;
+        }
+
+        $post_id = (int) get_queried_object_id();
+        if ( $post_id <= 0 || ! self::post_has_meanings( $post_id ) ) {
             return;
         }
 
@@ -1073,33 +1078,37 @@ class Jelyk_Word_Plugin {
 
         $css = <<<'CSS'
 .jelyk-word-block{margin-top:2.25rem;padding-top:1.25rem;border-top:1px solid rgba(0,0,0,.1)}
-.jelyk-langbar{display:flex;gap:.75rem;align-items:center;margin:0 0 1rem 0}
-.jelyk-langbar label{font-weight:600}
-.jelyk-langbar select{max-width:260px}
-.jelyk-word-meta{margin:0 0 1rem 0}
-.jelyk-kv-label{opacity:.75}
-.jelyk-meaning{margin:1.75rem 0 0 0;padding:0}
-.jelyk-meaning-title{margin:0 0 .35rem 0;font-weight:700}
-.jelyk-meaning-gloss{margin:0 0 .75rem 0;font-size:1.05em}
-.jelyk-meaning-tr{display:none;margin:.1rem 0 .6rem 0;font-size:1.02em;opacity:.92}
-.jelyk-hr{border:0;border-top:1px solid rgba(0,0,0,.12);margin:.75rem 0 1rem 0}
-.jelyk-row{margin:0 0 1rem 0}
-.jelyk-row-title{font-weight:700;margin:0 0 .35rem 0}
-.jelyk-tokens{display:flex;flex-wrap:wrap;gap:.35rem .45rem}
-.jelyk-token{display:inline-flex;align-items:center;padding:.18rem .5rem;border:1px solid rgba(0,0,0,.15);border-radius:.4rem;text-decoration:none;line-height:1.2}
-.jelyk-token:hover{text-decoration:none;border-color:rgba(0,0,0,.3)}
-.jelyk-token--plain{cursor:default}
-.jelyk-cards-title{font-weight:700;margin:0 0 .65rem 0}
-.jelyk-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}
-.jelyk-card{background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:.6rem;overflow:hidden}
-.jelyk-card figure{margin:0}
-.jelyk-card img{width:100%;height:auto;display:block}
-.jelyk-card-body{padding:.75rem .85rem}
-.jelyk-card-de{margin:0;font-weight:600}
-.jelyk-card-tr-wrap{margin:.45rem 0 0 0;font-size:.95em;opacity:.9}
-.jelyk-card-tr{display:none;margin:0}
-.jelyk-note{margin:.25rem 0 0 0;opacity:.85}
+.jelyk-word-block .jelyk-langbar{display:flex;gap:.75rem;align-items:center;margin:0 0 1rem 0}
+.jelyk-word-block .jelyk-langbar label{font-weight:600}
+.jelyk-word-block .jelyk-langbar select{max-width:260px}
+.jelyk-word-block .jelyk-word-meta{margin:0 0 1rem 0}
+.jelyk-word-block .jelyk-kv-label{opacity:.75}
+.jelyk-word-block .jelyk-meaning{margin:1.75rem 0 0 0;padding:0}
+.jelyk-word-block .jelyk-meaning-title{margin:0 0 .35rem 0;font-weight:700}
+.jelyk-word-block .jelyk-meaning-gloss{margin:0 0 .75rem 0;font-size:1.05em}
+.jelyk-word-block .jelyk-meaning-tr{display:none;margin:.1rem 0 .6rem 0;font-size:1.02em;opacity:.92}
+.jelyk-word-block .jelyk-hr{border:0;border-top:1px solid rgba(0,0,0,.12);margin:.75rem 0 1rem 0}
+.jelyk-word-block .jelyk-row{margin:0 0 1rem 0}
+.jelyk-word-block .jelyk-row-title{font-weight:700;margin:0 0 .35rem 0}
+.jelyk-word-block .jelyk-tokens{display:flex;flex-wrap:wrap;gap:.35rem .45rem}
+.jelyk-word-block .jelyk-token{display:inline-flex;align-items:center;padding:.18rem .5rem;border:1px solid rgba(0,0,0,.15);border-radius:.4rem;text-decoration:none;line-height:1.2}
+.jelyk-word-block .jelyk-token:hover{text-decoration:none;border-color:rgba(0,0,0,.3)}
+.jelyk-word-block .jelyk-token--plain{cursor:default}
+.jelyk-word-block .jelyk-cards-title{font-weight:700;margin:0 0 .65rem 0}
+.jelyk-word-block .jelyk-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}
+.jelyk-word-block .jelyk-card{background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:.6rem;overflow:hidden}
+.jelyk-word-block .jelyk-card figure{margin:0}
+.jelyk-word-block .jelyk-card img{width:100%;height:auto;display:block}
+.jelyk-word-block .jelyk-card-body{padding:.75rem .85rem}
+.jelyk-word-block .jelyk-card-de{margin:0;font-weight:600}
+.jelyk-word-block .jelyk-card-tr-wrap{margin:.45rem 0 0 0;font-size:.95em;opacity:.9}
+.jelyk-word-block .jelyk-card-tr{display:none;margin:0}
+.jelyk-word-block .jelyk-note{margin:.25rem 0 0 0;opacity:.85}
 CSS;
+
+        if ( defined( 'JELYK_DEBUG_CSS' ) && JELYK_DEBUG_CSS ) {
+            self::debug_check_frontend_css_scope( $css );
+        }
         wp_add_inline_style( 'jelyk-word-frontend', $css );
 
         // Tiny JS: language switcher for card translations (no reload).
@@ -1161,6 +1170,26 @@ CSS;
 })();
 JS;
         wp_add_inline_script( 'jelyk-word-frontend', $js );
+    }
+
+    protected static function debug_check_frontend_css_scope( $css ) {
+        $patterns = [
+            '/(?:^|\n)\s*html\s*[,\{]/i',
+            '/(?:^|\n)\s*body\s*[,\{]/i',
+            '/(?:^|\n)\s*\*\s*[,\{]/',
+            '/(?:^|\n)\s*p\s*\{/',
+            '/(?:^|\n)\s*h[1-6]\s*\{/',
+            '/(?:^|\n)\s*img\s*\{/',
+            '/(?:^|\n)\s*a\s*\{/',
+            '/(?:^|\n)\s*(ul|ol|li|figure|table|input|select|textarea)\s*\{/',
+        ];
+
+        foreach ( $patterns as $pattern ) {
+            if ( preg_match( $pattern, (string) $css ) ) {
+                error_log( 'Jelyk Word Plugin: Possible unscoped frontend CSS selector detected.' );
+                return;
+            }
+        }
     }
 
     public static function append_frontend_output( $content ) {
